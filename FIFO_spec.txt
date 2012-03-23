@@ -774,7 +774,18 @@
 
 
             e) any other table that may be affected
-                ??? this does need confirming 
+                ??? this does need confirming
+                
+               This may include
+                recv (for receipts)
+                invhist (for the transaction)
+                invbal (for period based inventory balances)
+                
+                trialbal (for the trial balance)
+                shipitem (for shipments)
+                cohist (for sales history)
+                
+                
   
 20. Other Considerations
     
