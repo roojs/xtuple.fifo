@@ -21,7 +21,8 @@
     and average which are typically good options for manufacturers. However,
     FIFO costing can be a better fit for distributors who require a lower
     maintenance solution. By definition, FIFO inventory will not require any
-    manual periodic cost recalculations.
+    manual periodic cost recalculations, however will require automated (probably
+    nightly) updates to adjust the costs to match any changes.
     
 2. Scope and Phasing
     
@@ -141,10 +142,13 @@
     stdcost() calls with either stdcostbuy() or stdcostsell(), these will
     fetch either a exact cost, or estimated COGS cost for the transaction.
     
-    On posting invhist, two tables invbuy and invsell tables are updated to
-    track allocation of stock, the invsell table being rebuilt as needed.
+    Using a trigger on invhist, two tables invhist_buy and invhist_sell tables are
+    updated to  track allocation of stock. They will group together multiple
+    transactions on the same Sales Order / Purchase Order (so that returns and
+    corrections will be accounted for in a single line transaction based on the
+    transaction date of the original PO/SO)
     
-    FIFO tracking will be done by entry date, NOT by transaction date.
+    FIFO tracking will be done by transaction date.
     
     Buy returns will be applied to transactions before SELL
     allocations, and will trigger a recalculation of all SELL transactions
@@ -154,7 +158,7 @@
     it is expected that this is run overnight.
     
     The system can handle negative stock and uses last buy prices as placeholders
-    for COGS.
+    for COGS or a nominal value of $1 where no previous buy price exists.
     
 14. Design issues that may need addressing
 
@@ -170,6 +174,8 @@
     None for inital project
     
 16. Schema Changes
+    
+    All new tables will be put in the fifo schema
 
     16.1 itemsite table
         
@@ -182,47 +188,49 @@
                
     16.2 invhist table
     
-        extra column to support cross referencing of return or reverse transactions
-        
-        ALTER TABLE invhist ADD COLUMN  invhist_update_of  INT DEFAULT NULL
-        
-        ALSO NEEDS to be indexed.
+        trigger to be added.
         
     16.3 invbuy table
     
         New table to store buy invhist buy transactions
-            
-            invbuy_id .. serial
-            invbuy_itemsite_id  
-            invbuy_invhist_id 
-            invbuy_qty
-            invbuy_unitcost
-            invbuy_totalcost
-            invbuy_ordernumber
         
-        THIS GET CREATED ON add, and qty/totalcost get's adjusted buy return()
-            - unitcost always stays the same..
-        NEVER GET's DELETED...
+            invbuy_invhist_id (firstid of group of transactions)
+          *  invbuy_transdate  (first transdate of group of transactions)
+          *  invbuy_ordnumber
+          *  invbuy_itemsite_id                             
+            invbuy_qty
+            invbuy_totalcost
+            invbuy_unitcost
+          *  invbuy_transtype
+            invbuy_qtyafter
+        
+        Items with '*' may not be required as they can be obtained by JOIN
+        
         
     16.4 invsell table
     
         New table to store buy invhist sell transactions
         
-            invsell_id            serial
-            invsell_itemsite_id 
-            invsell_invhist_id  (MULTIPLE RECORDS CAN POINT TO THE SAME BUY)
-            invsell_invbuy_id   = POINTER TO invbuy record that it got it's stock
-                                from.) or NULL if it's an estimate
-            invsell_qty          (WHOLE OR SPLIT OF STOCK ALLOCATED)
-            invsell_unitcost  
-            invsell_totalcost 
-
-        SINGLE OR MULTIPLE ROWS of these get's created for a SELL
-            when buy returns, then the data is trashed and recreated for affected entries
-            when sell return occurs, the original sell  records OF THIS, and
-                AFTER get trashed and recreated.
-
-
+            invsell_invhist_id (firstid of group of transactions)
+           * invsell_transdate  (first transdate of group of transactions)
+           * invsell_itemsite_id
+            invsell_qty
+            invsell_current_totalcost 
+            invsell_current_unitcost
+           * invsell_transtype
+            invsell_qtyafter
+            invsell_calc_unitcost
+            invsell_calc_totalcost
+            invsell_is_estimate
+        
+        Items with '*' may not be required as they can be obtained by JOIN
+        
+    16.4 invdepend table
+    
+        New table to store dependancy information
+            invdepend_invhist_id
+            invdepend_parent_id
+   
          
  
 17. Stored Procedure Changes
@@ -234,7 +242,7 @@
             This is our current list. we consider this complete.
             
 		17.1.1 copyso 
-			call stdcostsell(itemsite_id, coitem_qtyord)
+			call itemcost_dispense(itemsite_id, coitem_qtyord)
 		
 		
 		17.1.2 correctreceipt 
@@ -242,20 +250,20 @@
 		
 		
 		17.1.3 distributeitemlocseries
-			use stdcostsell(itemsite_id,_itemlocdist.qty)
+			use itemcost_dispense(itemsite_id,_itemlocdist.qty)
  		
 		17.1.4 distributetolocations
-			use stdcostsell(itemsite_id,_itemlocdist.qty)
+			use itemcost_dispense(itemsite_id,_itemlocdist.qty)
  		
 		17.1.5 explodekit
-			call stdcostsell(_item.itemsite_id, _item.qty)	
+			call itemcost_dispense(_item.itemsite_id, _item.qty)	
 	 
 		
 		17.1.6 initialdistribution
-			call stdcostsell(itemsite_id, _r.itemloc_qty) for NN transactions. 
+			call itemcost_dispense(itemsite_id, _r.itemloc_qty) for NN transactions. 
 		
 		17.1.7 insertsalesline
-			call stdcostsell(_r.item_id, pNEW.qty_ordered)
+			call itemcost_dispense(_r.item_id, pNEW.qty_ordered)
 		
         17.1.8 postinvtrans
                 This has to be aware of BUY'ing transactions, when called it
@@ -273,19 +281,19 @@
                 For SELL, it can just call stdcostsell(itemsite, qty)
 		
 		17.1.9 postreceipt
-			use stdcostsell(_r.itemsite_item_id, _r.recv_qty) for calculating _recvvalue and stdcostbuy for RR transcation
+			use itemcost_dispense(_r.itemsite_item_id, _r.recv_qty) for calculating _recvvalue and stdcostbuy for RR transcation
 		
 		17.1.10 relocateinventory
-			call stdcostsell(itemsite_id, _qty) for NN transactions. 
+			call itemcost_dispense(itemsite_id, _qty) for NN transactions. 
 		
 		17.1.11 valueatshipping
-			call stdcostsell for SO order  
+			call itemcost_dispense for SO order  
 		
 		17.1.12 _itemsiteaftertrigger
-			call stdcostsell(NEW.itemsite_item_id, NEW.itemsite_qtyonhand)
+			call itemcost_dispense(NEW.itemsite_item_id, NEW.itemsite_qtyonhand)
 		
         17.1.13 _poitemtrigger
-			use stdcostbuy(itemsite_item_id, NEW.poitem_unitprice) instead stdcost
+			use itemcost_acquire(itemsite_item_id, NEW.poitem_unitprice) instead stdcost
 		
         
 		17.1.14  
@@ -327,35 +335,30 @@
 		
 
 	17.3 postinvhist 
-
-		call invhist_updatebuysell(invhist_id) IF The transaction actually
-        changes qty's
-        
-        The original idea that we could bulk update invby/sell  transactions
-        at the end is not valid due to the way transactions work in xtuple.
-
+            NO CHANGES REQUIRED
  
 	17.4 correctreceipt 
 
-		  call invbuy_add(_invhistid) after posting of RP transaction
+		  NO CHANGES REQUIRED
 
 	17.5  invadjustment 
-        QTY can go up or down
+         
+         QTY can go up or down
             if we are running FIFO mode or cost controled as 'F'
             INCREASE QTY
                 We have to be given a fixed cost for this. We should error out
                     if no value is provided
-                It will be handled by postinvhist() later, which will do our
-                    invhistsplit updates...
+                    THROW EXCEPTION
+                
 
             DECREASE QTY
                 It's like selling the product, so cost is allocated using FIFO
                 We should error out if the user enters a value, as it will never
                     be correct..
+                    THROW EXCEPTION
                 We should use our stdcostsell(itemsite, qty) and pass that to
                     postinvtrans()
-                It will be handled by postinvhist() later, which will do our
-                    invhistsplit updates...
+                
 	
     17.6  invreceipt 
 		    same as "invadjustment"
@@ -369,7 +372,7 @@
             throw error if this happens. 
 		
 	17.8 postreceipt 
-            no change required.
+             NO CHANGES REQUIRED
 
 		
 	17.9 voidinvoice 
@@ -395,13 +398,17 @@
 	
     will not be permitted, and will throw an error if there is negative stock or
     estimated inventory splits for that period.
+    
+    There are apparently checks in gltrans trigger ??? - just verify if this
+    is the case.. 
 	
 	 
 19. New Stored Procedures
 
-    
+    All new procedures will be put in the fifo schema
 
-	19.1 stdcostsell(itemsite, qty ) method with QTY as second argument.
+
+	19.1 itemcost_dispense(itemsite, qty ) method with QTY as second argument.
             
             These should replace stdcost() calls that sell an item, the point
             is to return either an estimated or exact price for unitcost
@@ -414,7 +421,7 @@
             price is done similar to code in invsell_add()
 
 	
-	19.2 stdcostbuy(itemsite, unitcost)
+	19.2 itemcost_acquire(itemsite, unitcost)
             
             Used by any code that buy stock.
             
@@ -424,7 +431,7 @@
             otherwise return unitcost
 	
 
-    19.3 invhist_updatebuysell(invhist_id)  
+    19.3 TRIGGER _invhisttriggerfifo / TRIGGER FUNCTION invhisttriggerfifo()  
           
             This is triggered by postinvhist, the point is to update the
             invsell/buys table with either an accurate or estimated value.
@@ -458,260 +465,104 @@
                     UPDATE   invhistsplit_orig_qty and Flags it as estimated 
 
             -- calls relivant method..
-            invbuy_add()
-            invbuy_return()
-            invsell_add()
-            invsell_return()
-                        
+            
+            
+            IF it's a BUY  :
+            
+                determine base entry (eg. the original buy transaction)
+                
+                UPDATE OR INSERT THE invdepend table.
+            
+                UPDATE OR INSERT THE ROW based on the rules in the invhist_buy VIEW design
+                
+                GET THE VALUE OF invbuy_qtyafter() FOR THIS ROW.
+                ADD the difference between the current row and invbuy_qtyafter()
+                    to this entry, and all future ones based on the date/id rule.
+                
+                FIND the FIRST invsell that used this BUY using the QTY before the update.
+                
+                CALL invhist_sell_updatecalc on invsell ON THAT row and all ones after it based on date/id rule
+                
+                
+            IF it's a SELL:
+            
+                
+                
+                determine base entry (eg. the original buy transaction)
+                
+                UPDATE OR INSERT THE invdepend table.
+            
+                UPDATE OR INSERT THE ROW based on the rules in the invhist_sell VIEW design
+                
+                GET THE VALUE OF invhist_sell_qtybefore() FOR THIS ROW.
+                ADD the difference between the current row and invhist_sell_qtybefore
+                    to this entry, and all future ones based on the date/id rule.
+              
+                CALL invhist_sell_updatecalc on invhist_sell ON THIS row and all ones after it based on date/id rule
+            
+            
+            
+            
+	19.4	invhist_sell_updatecalc(invhist_id)
+                
+            
+            THIS finds which buy provided the stock to sell..
+            
+            The query looks something like this,
+            however it should be able to determine the FIFO cost in a single
+            query, using a bit of maths on the buy quantities
+            
+            select * from invhist_buy
+                    where
+                        itemsite_id=sell_itemsite_id
+                        AND
+                        qtyafter > sell_qtybefore
+                        AND
+                        qtyafter<= sell_qty_before + sell_qty
+                    
+                    ORDER BY
+                        transdate ASC, invhist_id ASC
+                    LIMIT 1;
+            
+            USE THE VALUES RETURNED TO update the SELL cost
              
-
+            IF NO rows are returned, use the last unit buy price
+            IF that does not exist, USE NOMINAL VALUE OF $1
+            MUST SET invsell_is_estimate...      
+                     
+    19.5..19.8  REMOVED
     
-
-	19.4	invbuy_add(invhist_id)  -- BUY / ADJUST GAIN:
-            INSERT
-                invbuy_id .. serial
-                invbuy_itemsite_id  =  invhist_itemsite_id
-                invbuy_invhist_id  = invhist_id
-                invbuy_qty = (invhist_after_qty -invhist_before_qty) 
-                invbuy_unitcost = (invhist_after_value -invhist_before_value) / (invhist_after_qty -invhist_before_qty) 
-                invbuy_totalcost  = (invhist_after_value - invhist_before_value)
-                invbuy_ordernumber = invhist_ordertype == 'RP' ? invhist_ordernumber : 'ADJUST-' | invhist_id
-	 
- 
-	19.5 	invbuy_return(i_invhist_id) --BUY RETURN
-            --Find the original invhist_id USING the ordernumber
-
-            SELECT v_ordernumber, v_itemsite_id from invhist where invhist_id = i_invhist_id
-
-            --Find the original invhist_id USING the ordernumber
-            SELECT invhist_id AS v_orig_id FROM invhist WHERE
-                        WHERE ordertype='RP'
-                            AND
-                            ordernumber = v_ordernumber
-                            AND
-                            itemsite_id = v_itemsite_id
-                    ORDER BY invhist_id ASC LIMIT 1
-        
     
-            UPDATE invbuy SET 
-                invbuy_qty = SELECT (
-                     SUM (invhist_after_qty -invhist_before_qty) 
-                        FROM invhist
-                        WHERE ordertype='RP'
-                            AND
-                            ordernumber = v_ordernumber
-                            AND
-                            itemsite_id = v_itemsite_id
-                    ),
-                invbuy_totalvalue = 
-                        invbuy_unitcost
-                        *
-                    SELECT (
-                     SUM (invhist_after_qty -invhist_before_qty) 
-                        FROM invhist
-                        WHERE ordertype='RP'
-                            AND
-                            ordernumber = v_ordernumber
-                            AND
-                            itemsite_id = v_itemsite_id
-                    )
-                    
-                WHERE
-                    invbuy_invhist_id =   v_orig_id
-
-            SELECT  invsell_recalc(invbuy_id) FROM invbuy WHERE invbuy_invhist_id =  v_orig_id;
- 
-    19.6 	invsell_recalc(invbuy_id)
-            Called by return
-            
-            get v_itemsite_id
-            
-            -- delete sales that on and after this transaction.
-            DELETE FROM invsell WHERE invsell_invbuy_id >= invbuy_id AND itemsite= v_itemsite
-
-            -- delete sales that where guessed...
-            DELETE FROM invsell WHERE
-                     invsell_invbuy_id IS NULL
-                     AND
-                     itemsite_id= v_itemsite_id
-            
-            -- delete all invsell records that are partially fullfilled.
-            DELETE FROM invsell 
-                WHERE invsell_invhist_id IN (
-                    SELECT invsell_invhist_id , sum(invsell_qty) FROM
-                        invsell LEFT JOIN invhist ON ...
-                            WHERE 
-                                sum(invsell_qty) != (invhist_after_qty -invhist_before_qty) 
-                                AND 
-                                itemsite_id = v_itemsite_id
-                            
-                            GROUP BY invsell_invhist_id
-                    )
-                    AND
-                    itemsite_id = v_itemsite_id;
-
-            -- rebuild sell items..    
-            SELECT invsell_add(invhist_id,true) FROM invhist WHERE
-                invhist_id NOT IN (
-                    SELECT invhist_id FROM invbuy
-                )
-                AND
-                invhist_update_of IS NULL
-                AND
-                invhist_transtype = 'SH' 
-                OR
-                    (
-                        invhist_transtype = 'AD' 
-                        AND
-                       (invhist_after_qty -invhist_before_qty) < 0
-
-             -- at this point the sell records contain unitcosts that may not match invhist values..
-             -- that will be sorted out by invsell_apply()
-
-     
-
-
-    19.7  invsell_add(i_invhist_id, include_other) -- SELL OR ADJUST DOWN
-            SELECT 
-                transtype , (invhist_after_qty -invhist_before_qty) ,
-                ordernumber, itemsite
-                INTO 
-                v_transtype , v_qty, v_ordernumber, v_itemsite_id
-            
-
-            IF include_other AND v_transtype != 'AD' THEN
-                SELECT SUM(invhist_after_qty -invhist_before_qty) INTO qty
-                    FROM invhist
-                         WHERE 
-                            itemsite_id = v_itemsite_id
-                            AND
-                            ordernumber = v_ordernumber
-
-            
-        // GRAB THE AVAILABLE STOCK....
-            SELECT invbuy_id , qty - (SELECT SUM(invsell_qty) FROM invsell WHERE invsell_invbuy_id = invbuy_id) as avail_qty
-                    invbuy_unitcost
-                    INTO 
-                    v_invbuy_id , v_avail_qty, v_unitcost
-                    FROM invbuy
-                    WHERE  
-                        itemsite_id = v_itemsite_id 
-                        AND
-                        avail_qty > 0
-                    ORDER BY 
-                        invbuy_invhist_id ASC
-
-            v_used = 0;
-            LOOP SELECT
-                if (v_used = v_qty) BREAK
-
-                v_use = v_avail_qty > (v_qty - v_used) ?  v_qty - v_used : v_avail_qty;
-
-                INSERT INTO invsell
-                    SET 
-                        invsell_id ..serial
-                        invsell_itemsite_id =   v_itemsite_id
-                        invsell_invhist_id = i_invhist_id
-                        invsell_invbuy_id = v_invbuy_id
-                        invsell_qty = v_use
-                        invsell_unitcost = v_unitcost
-                        invsell_totalcost = v_unitcost * v_use 
-         
-
-                v_used += v_use
-            END LOOP
-            
-            if v_used < v_qty THEN
-                -- not enough stock, we have to enter a entry in sell 
-                INSERT INTO invsell
-                    SET 
-                        invsell_id ..serial
-                        invsell_itemsite_id =   v_itemsite_id
-                        invsell_invhist_id = i_invhist_id
-                        invsell_invbuy_id = NULL
-                        invsell_qty      = (v_qty - v_used)
-                        invsell_unitcost = v_unitcost
-                        invsell_totalcost = v_unitcost * (v_qty - v_used)
-
-            SELECT SUM(invsell_totalcost) INTO v_totalcost FROM invsell where invhist_id = invhist;
-            -- not sure if wee need to return total cost, as it's not really getting used.
-            RETURN v_totalcost
- 
-
-    19.8 	 invsell_return(i_invhist_id)   -- SELL RETURN (voided invoice, returned from shipment)
-                -- as signle return will just 
-                -- find the original history id..
-                GET v_itemsite_id, v_ordernumber, v_qty
-
-                SELECT v_orig_invhist_id  FROM invhist 
-                        WHERE
-                                itemsite_id = v_itemsite_id
-                            AND
-                                ordernumber = v_ordernumber 
-                            AND
-                                ordertype = 'SH'
-                        ORDER BY invhist_id ASC
-                        LIMIT 1
-
-                -- keep a reference in invhist - this is ued by apply_all...
-                UPDATE invhist SET invhist_update_of = v_orig_invhist_id 
-                        WHERE
-                            invhist_id = i_invhist_id
-
-                    
-
-                -- delete the old invsell for this item..
-                DELETE FROM invsell where invhist_id => v_orig_invhist_id
-                         AND itemsite_id  = v_itemsite_id;
- 
-
-                -- rebuild invsell for this transaction and ones after it..
-
-                SELECT invsell_add(v_orig_invhist_id, true) FROM invhist 
-                        WHERE
-                             invhist_id => v_orig_invhist_id
-                             AND
-                          itemsite_id = v_itemsite_id
-                            AND (
-                                 ordertype = 'SH'   
-                                OR
-                                (ordertype = 'AD' AND (invhist_after_qty -invhist_before_qty) < 0)
-                            )
-                            AND
-                            invhist_update_of IS NULL
-                        ORDER BY 
-                            invhist_id ASC
-
-                                
-
-                SELECT SUM(invsell_totalcost) / v_qty INTO v_unitcost FROM invsell where invhist_id = invsell_invhist_id;
-                RETURN the v_ unitcost....
- 
-
-
 	19.9 	invsell_apply_all() 
             -- look for invsell data that does not match invhist table.
 
-            SELECT invsell_apply(
-                    invhist_id,
-                       (invhist_after_value - invhist_before_value) as curr_value,
-                       (SELECT sum(invsell_totalcost) FROM invsell 
-                            WHERE invsell_invhist_id = invhist_id OR invsell_invhist_id = invhist_update_of
-                        ) / (invhist_qty_value - invhist_before_qty) as new_value
-                    )               
-
-                WHERE
-                    -- sell transactions
-                    invhist_transtype IN (SH, AD, RS)
-                   AND
-                    -- ignore where sell price is estimated
-                    invhist_id NOT IN (SELECT invsell_invhist_id FROM invsell WHERE invsell_invbuy_id IS NULL)
+                
+                SELECT
+                    invsell_apply(
+                        invhist_id,
+                        invsell_current_unitcost * (invhist_value_after - invhist_value_before),
+                        invsell_calc_unitcost * (invhist_value_after - invhist_value_before)
+                       
+                    ) as result
+                    FROM
+                        invhist
+                    INNER JOIN
+                        invdepend ON invhist_id = invdepend_invhist_id
+                    INNER JOIN
+                        invsell ON invdepend_parent_id = invsell_invhist_id
+                    
+                    WHERE
+                        invsell_current_totalcost  !=  invsell_calc_totalcost
+                        AND
+                        invsell_is_estimate = false
+           
+                 
 	 
 	19.10 	invsell_apply(invhist_id, curr_value, new_value)
             if (curr_Value == new_value)
-                RETURN .. do nothing.
+                RETURN .. do nothing. << should ot happen... above code should fix that..
 
-		    called by invsell_apply_all on all unitcosts .. just ignores when they match..
+		    called by invsell_apply_all 
             
 
             a) UPDATE invhist table
@@ -773,12 +624,26 @@
             d) UPDATE itemsite_value 
 
 
-            e) any other table that may be affected
+            e) UPDATE arapply, aropen tables 
+                if invhist_transtype = SH 
+				
+                Then search entry in arapply, using
+                arapply_journalnumber = gltrans_journalnumber,
+				in aropen - aropen_journalnumber = gltrans_journalnumber	
+				
+            f) UPDATE apapply, apopen tables 
+                if invhist_transtype = RP 
+				
+                Then search entry in apapply, using
+                apapply_journalnumber = gltrans_journalnumber,
+				in apopen - apopen_journalnumber = gltrans_journalnumber	
+				
+            g) any other table that may be affected
                 ??? this does need confirming
                 
                This may include
                 recv (for receipts)
-                invhist (for the transaction)
+                -- invhist (for the transaction) (already present above)
                 invbal (for period based inventory balances)
                 
                 trialbal (for the trial balance)
