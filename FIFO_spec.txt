@@ -512,20 +512,21 @@
             however it should be able to determine the FIFO cost in a single
             query, using a bit of maths on the buy quantities
             
-            select * from invhist_buy
+            
+            select * from invbuy
                     where
-                        itemsite_id=sell_itemsite_id
+                        invbuy_itemsite_id=invsell_itemsite_id
                         AND
-                        qtyafter > sell_qtybefore
+                        invbuy_qtyafter > invsell_qtybefore
                         AND
-                        qtyafter<= sell_qty_before + sell_qty
+                        invbuy_qtyafter <= invsell_qty_before + invsell_qty
                     
                     ORDER BY
-                        transdate ASC, invhist_id ASC
+                         invbuy_qtyafter ASC
                     LIMIT 1;
             
             USE THE VALUES RETURNED TO update the SELL cost
-             
+              
             IF NO rows are returned, use the last unit buy price
             IF that does not exist, USE NOMINAL VALUE OF $1
             MUST SET invsell_is_estimate...      
