@@ -1,0 +1,41 @@
+--- original/valueatshipping.sql	2012-05-11 13:24:09.000000000 +0800
++++ valueatshipping.sql	2012-05-09 08:47:40.000000000 +0800
+@@ -1,14 +1,10 @@
+-CREATE OR REPLACE FUNCTION valueAtShipping(INTEGER) RETURNS NUMERIC AS $$
+--- Copyright (c) 1999-2012 by OpenMFG LLC, d/b/a xTuple. 
+--- See www.xtuple.com/CPAL for the full text of the software license.
+-BEGIN
+-  RETURN valueAtShipping('SO', $1);
+-END;
+-$$ LANGUAGE 'plpgsql';
++-- Function: valueatshipping(text, integer)
+ 
+-CREATE OR REPLACE FUNCTION valueAtShipping(TEXT, INTEGER) RETURNS NUMERIC AS $$
+--- Copyright (c) 1999-2012 by OpenMFG LLC, d/b/a xTuple. 
+--- See www.xtuple.com/CPAL for the full text of the software license.
++-- DROP FUNCTION valueatshipping(text, integer);
++
++CREATE OR REPLACE FUNCTION valueatshipping(text, integer)
++  RETURNS numeric AS
++$BODY$
+ DECLARE
+   pordertype	ALIAS FOR $1;
+   plineitemid	ALIAS FOR $2;
+@@ -31,7 +27,7 @@
+ 
+   IF (pordertype = 'SO') THEN
+     SELECT COALESCE(CASE WHEN (itemsite_costmethod = 'N') THEN 0
+-                         WHEN (itemsite_costmethod = 'S') THEN stdCost(itemsite_item_id)
++                         WHEN (itemsite_costmethod = 'S') THEN itemcost_dispense(itemsite_item_id, _qty)
+                          ELSE avgCost(itemsite_item_id)
+                     END, 0.0) INTO _cost
+     FROM coitem JOIN itemsite ON (itemsite_id=coitem_itemsite_id)
+@@ -52,4 +48,7 @@
+   RETURN _value;
+ 
+ END;
+-$$ LANGUAGE 'plpgsql';
++$BODY$
++  LANGUAGE plpgsql VOLATILE
++  COST 100;
++ALTER FUNCTION valueatshipping(text, integer) OWNER TO "admin";

@@ -1,3 +1,6 @@
+
+
+
 1. Overview
     
     Basically the plan is to Implement FIFO Costing in Xtuple.
@@ -228,8 +231,12 @@
     16.4 invdepend table
     
         New table to store dependancy information
-            invdepend_invhist_id
+            invdepend_invhist_id 
             invdepend_parent_id
+            
+            ** ? should this store the final totalcosts for transactions
+             so they could be checked against totalcost for the whole TX ensuring
+             that rounding does not get lost..
    
          
  
@@ -251,16 +258,18 @@
 		
 		17.1.3 distributeitemlocseries
 			use itemcost_dispense(itemsite_id,_itemlocdist.qty)
- 		
+			
 		17.1.4 distributetolocations
 			use itemcost_dispense(itemsite_id,_itemlocdist.qty)
  		
 		17.1.5 explodekit
 			call itemcost_dispense(_item.itemsite_id, _item.qty)	
-	 
+		not need, bom item used
 		
 		17.1.6 initialdistribution
 			call itemcost_dispense(itemsite_id, _r.itemloc_qty) for NN transactions. 
+		
+		not need, invqty = 0
 		
 		17.1.7 insertsalesline
 			call itemcost_dispense(_r.item_id, pNEW.qty_ordered)
@@ -277,6 +286,7 @@
                         
                         Use that rather than stdcost()..
                         It should also COALESCE pCostOvrl as unitcost if set...
+						-- Attention  Ask question about this (about pCostOvrl)
                 
                 For SELL, it can just call stdcostsell(itemsite, qty)
 		
@@ -285,16 +295,18 @@
 		
 		17.1.10 relocateinventory
 			call itemcost_dispense(itemsite_id, _qty) for NN transactions. 
-		
+			
 		17.1.11 valueatshipping
 			call itemcost_dispense for SO order  
 		
 		17.1.12 _itemsiteaftertrigger
 			call itemcost_dispense(NEW.itemsite_item_id, NEW.itemsite_qtyonhand)
+			
+		not needed, using for calculating variance, when itemsite costmethod calculated
 		
         17.1.13 _poitemtrigger
 			use itemcost_acquire(itemsite_item_id, NEW.poitem_unitprice) instead stdcost
-		
+		not need, using for updading special field poitem_stdcost
         
 		17.1.14  
 	    
@@ -366,6 +378,8 @@
                 decrease should not happen.?
 
 	17.7 postporeturns
+			value already matches, such as it get from it, i.e from recv table.
+			
             Just ensure that value returned matches the unitcost of the Purchase
             order.
             If we are running FIFO, check if another value has been entered -
@@ -376,9 +390,11 @@
 
 		
 	17.9 voidinvoice 
-		    for changing totalcost values or untiprice items not need nothing there. 
+			realised in postinvtrans
+	
+		    /-- for changing totalcost values or untiprice items not need nothing there. 
             May be will need use / modificate it procedure for checking  before
-            closing acoounting period, etc. need research it yet.
+            closing acoounting period, etc. need research it yet. -/
 	 
 
 	17.10   stdcost()
@@ -443,6 +459,7 @@
 
             Case:
                 BUY - RP: Recieve Inventory +ve
+                    Note: invhist_ordnumber POINTS to shiphead... (may not be relivant.)
                 BUY - AD: misc adjustment Can be +ve    
                     INSERT a invhistsplit which can be used sell.
 
@@ -541,9 +558,8 @@
                 SELECT
                     invsell_apply(
                         invhist_id,
-                        invsell_current_unitcost * (invhist_value_after - invhist_value_before),
-                        invsell_calc_unitcost * (invhist_value_after - invhist_value_before)
-                       
+                        invsell_current_unitcost * (invhist_qoh_after - invhist_qoh_before),
+                        invsell_calc_unitcost * (invhist_qoh_after - invhist_qoh_before)
                     ) as result
                     FROM
                         invhist
@@ -630,14 +646,21 @@
 				
                 Then search entry in arapply, using
                 arapply_journalnumber = gltrans_journalnumber,
-				in aropen - aropen_journalnumber = gltrans_journalnumber	
+				in aropen - aropen_journalnumber = gltrans_journalnumber
+                
+                [27APR2012] - These may not be needed. unit cost should not affect
+                            Account recieveable tables?
+                
 				
             f) UPDATE apapply, apopen tables 
                 if invhist_transtype = RP 
 				
                 Then search entry in apapply, using
                 apapply_journalnumber = gltrans_journalnumber,
-				in apopen - apopen_journalnumber = gltrans_journalnumber	
+				in apopen - apopen_journalnumber = gltrans_journalnumber
+                
+                [27APR2012] - These may not be needed. unit cost should not affect
+                            Account recieveable tables?
 				
             g) any other table that may be affected
                 ??? this does need confirming
@@ -714,5 +737,33 @@
     
     If users have customized their stored procedures then these changes may
     cause problems (although that is not likely a supported scenario)
- 
+    
+    
+    
+26. CHANGES
+    
+    26.1  when invhist_ordnumber for ordtype='PO' and transtype = 'RP' THEN
+            invhist_ordnumb POINTS TO {pohead_number}-{poitem_linenumber}
+            This should should not affect our calculations on FIFO
+            
+            It does not affect invbuy/invsell as they are distinct
+            It should not affect updating of costs, as in theory our  buy prices
+              are not getting updated.
+          
+          This is UPDATED from before, where I previously thought it related to
+            shiphead_number.
+    
+27. Install Process [9MAY2012]
+
+    27.1 New procedures
+        
+        fifo-XXXXXX.sql
+        
+        
+    27.2 Modified procedures
+        
+        Filenames should follow the same name as names in old codebase (so we can diff easily).
+        
+        
+        
     

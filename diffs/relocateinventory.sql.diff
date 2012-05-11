@@ -1,0 +1,41 @@
+--- original/relocateinventory.sql	2012-05-11 13:23:56.000000000 +0800
++++ relocateinventory.sql	2012-05-09 08:47:11.000000000 +0800
+@@ -1,14 +1,10 @@
+-CREATE OR REPLACE FUNCTION relocateInventory(INTEGER, INTEGER, INTEGER, NUMERIC, TEXT) RETURNS INTEGER AS $$
+--- Copyright (c) 1999-2012 by OpenMFG LLC, d/b/a xTuple. 
+--- See www.xtuple.com/CPAL for the full text of the software license.
+-BEGIN
+-  RETURN relocateInventory($1, $2, $3, $4, $5, CURRENT_TIMESTAMP);
+-END;
+-$$ LANGUAGE 'plpgsql';
++-- Function: relocateinventory(integer, integer, integer, numeric, text, timestamp with time zone)
+ 
+-CREATE OR REPLACE FUNCTION relocateInventory(INTEGER, INTEGER, INTEGER, NUMERIC, TEXT, TIMESTAMP WITH TIME ZONE) RETURNS INTEGER AS $$
+--- Copyright (c) 1999-2012 by OpenMFG LLC, d/b/a xTuple. 
+--- See www.xtuple.com/CPAL for the full text of the software license.
++-- DROP FUNCTION relocateinventory(integer, integer, integer, numeric, text, timestamp with time zone);
++
++CREATE OR REPLACE FUNCTION relocateinventory(integer, integer, integer, numeric, text, timestamp with time zone)
++  RETURNS integer AS
++$BODY$
+ DECLARE
+   pSourceItemlocid      ALIAS FOR $1;
+   pTargetLocationid     ALIAS FOR $2;
+@@ -163,7 +159,7 @@
+            '', '', _GlDistTS,
+            uom_name,
+            CASE WHEN (itemsite_costmethod='A') THEN avgcost(itemsite_id)
+-                ELSE stdCost(item_id)
++                ELSE itemcost_dispense(item_id, _qty)
+            END, itemsite_costmethod,
+            itemsite_value, itemsite_value, _itemlocSeries
+     FROM item, itemsite, uom
+@@ -188,4 +184,7 @@
+   RETURN _invhistid;
+ 
+ END;
+-$$ LANGUAGE 'plpgsql';
++$BODY$
++  LANGUAGE plpgsql VOLATILE
++  COST 100;
++ALTER FUNCTION relocateinventory(integer, integer, integer, numeric, text, timestamp with time zone) OWNER TO "admin";

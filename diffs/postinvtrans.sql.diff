@@ -1,0 +1,100 @@
+--- original/postinvtrans.sql	2012-05-11 13:23:56.000000000 +0800
++++ postinvtrans.sql	2012-05-11 13:58:26.000000000 +0800
+@@ -1,40 +1,10 @@
+-CREATE OR REPLACE FUNCTION postInvTrans( INTEGER, TEXT, NUMERIC,
+-                                         TEXT, TEXT, TEXT, TEXT, TEXT,
+-                                         INTEGER, INTEGER, INTEGER) RETURNS INTEGER AS $$
+--- Copyright (c) 1999-2012 by OpenMFG LLC, d/b/a xTuple. 
+--- See www.xtuple.com/CPAL for the full text of the software license.
+-BEGIN
+-  RETURN postInvTrans($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, CURRENT_TIMESTAMP, NULL);
+-END;
+-$$ LANGUAGE 'plpgsql';
++-- Function: postinvtrans(integer, text, numeric, text, text, text, text, text, integer, integer, integer, timestamp with time zone, numeric, integer)
+ 
+-CREATE OR REPLACE FUNCTION postInvTrans( INTEGER, TEXT, NUMERIC,
+-                                         TEXT, TEXT, TEXT, TEXT, TEXT,
+-                                         INTEGER, INTEGER, INTEGER, TIMESTAMP WITH TIME ZONE) RETURNS INTEGER AS $$
+--- Copyright (c) 1999-2012 by OpenMFG LLC, d/b/a xTuple. 
+--- See www.xtuple.com/CPAL for the full text of the software license.
+-BEGIN
+-  RETURN postInvTrans($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NULL);
+-END;
+-$$ LANGUAGE 'plpgsql';
+-
+-CREATE OR REPLACE FUNCTION postInvTrans( INTEGER, TEXT, NUMERIC,
+-                                         TEXT, TEXT, TEXT, TEXT, TEXT,
+-                                         INTEGER, INTEGER, INTEGER, TIMESTAMP WITH TIME ZONE,
+-                                         NUMERIC) RETURNS INTEGER AS $$
+--- Copyright (c) 1999-2012 by OpenMFG LLC, d/b/a xTuple. 
+--- See www.xtuple.com/CPAL for the full text of the software license.
+-BEGIN
+-  RETURN postInvTrans($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NULL);
+-END;
+-$$ LANGUAGE 'plpgsql';
++-- DROP FUNCTION postinvtrans(integer, text, numeric, text, text, text, text, text, integer, integer, integer, timestamp with time zone, numeric, integer);
+ 
+-CREATE OR REPLACE FUNCTION postInvTrans( INTEGER, TEXT, NUMERIC,
+-                                         TEXT, TEXT, TEXT, TEXT, TEXT,
+-                                         INTEGER, INTEGER, INTEGER, TIMESTAMP WITH TIME ZONE,
+-                                         NUMERIC, INTEGER) RETURNS INTEGER AS $$
+--- Copyright (c) 1999-2012 by OpenMFG LLC, d/b/a xTuple. 
+--- See www.xtuple.com/CPAL for the full text of the software license.
++CREATE OR REPLACE FUNCTION postinvtrans(integer, text, numeric, text, text, text, text, text, integer, integer, integer, timestamp with time zone, numeric, integer)
++  RETURNS integer AS
++$BODY$
+ DECLARE
+   pItemsiteid	     ALIAS FOR $1;
+   pTransType	     ALIAS FOR $2;
+@@ -77,6 +47,42 @@
+   FROM itemsite JOIN item ON (item_id=itemsite_item_id)
+   WHERE (itemsite_id=pItemsiteid);
+ 
++
++  -- FIFO support
++  _r.cost := COALESCE(pCostOvrld, _r.cost);
++  
++  IF (
++        _r.itemsite_costmethod = 'F' 
++        OR
++        (
++            _r.itemsite_costmethod = 'S' AND fetchMetricBool('UseStandardAsFIFO')
++        )
++    ) THEN
++    
++        
++        IF (pTransType = 'SH' OR pTransType = 'RS') THEN
++            -- Shipment or return shipment
++            -- cost is based on fifo calculation?
++            _r.cost = itemcost_dispense(pItemsiteid, pQty);
++        ELSE
++            -- recieving stock.
++            -- look up cost in purchase order
++-- THIS NEEDS TO THROW AN ERROR IF the cost has not been found
++-- Just in case we missed something.
++            
++            SELECT poitem_uniprice
++                INTO _r.cost
++                FROM invhist ih, pohead ph, poitem pt 
++                WHERE 
++                    pOrderNumber = pohead_number || '-' || poitem_linenumber  
++                    AND
++                    poitem_pohead_id = pohead_id
++                    AND 
++                    poitem_itemsite_id = pItemsiteid;
++            
++        END IF;
++    END IF;
++  
+   --  Post the Inventory Transactions
+   IF (NOT _r.nocontrol) THEN
+ 
+@@ -257,4 +263,7 @@
+   END IF;
+ 
+ END;
+-$$ LANGUAGE 'plpgsql';
++$BODY$
++  LANGUAGE plpgsql VOLATILE
++  COST 100;
++ALTER FUNCTION postinvtrans(integer, text, numeric, text, text, text, text, text, integer, integer, integer, timestamp with time zone, numeric, integer) OWNER TO "admin";

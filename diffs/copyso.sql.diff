@@ -1,0 +1,33 @@
+--- original/copyso.sql	2012-05-11 13:50:52.000000000 +0800
++++ copyso.sql	2012-05-11 13:51:02.000000000 +0800
+@@ -1,4 +1,10 @@
+-CREATE OR REPLACE FUNCTION copySo(INTEGER, DATE) RETURNS INTEGER AS $$
++-- Function: copyso(integer, date)
++
++-- DROP FUNCTION copyso(integer, date);
++
++CREATE OR REPLACE FUNCTION copyso(integer, date)
++  RETURNS integer AS
++$BODY$
+ DECLARE
+   pSoheadid ALIAS FOR $1;
+   pSchedDate ALIAS FOR $2;
+@@ -212,7 +218,7 @@
+     COALESCE(pSchedDate, coitem_scheddate),
+     coitem_promdate,
+     coitem_qtyord,
+-    stdCost(itemsite_item_id),
++    itemcost_dispense(itemsite_item_id, coitem_qtyord),
+     coitem_price,
+     coitem_custprice,
+     0.0,
+@@ -261,4 +267,7 @@
+   RETURN _soheadid;
+ 
+ END;
+-$$ LANGUAGE plpgsql;
+\ No newline at end of file
++$BODY$
++  LANGUAGE plpgsql VOLATILE
++  COST 100;
++ALTER FUNCTION copyso(integer, date) OWNER TO "admin";
