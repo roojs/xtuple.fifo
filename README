@@ -1,0 +1,11 @@
+This is the FIFO changes for xtuple
+
+Refer to FIFO_spec.txt for details on the design.
+
+In general:
+
+x-fifo-* are the files that have been added.
+
+other sql files are changes to existing code - refer to the diffs directory to
+see the differences.
+
