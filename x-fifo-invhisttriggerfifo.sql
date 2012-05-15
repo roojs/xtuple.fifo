@@ -1,5 +1,5 @@
 --- THIS DOES NOT WORK YET - hence we remove the trigger..
-DROP TRIGGER _invhisttriggerfifo ON invhist;
+--DROP TRIGGER _invhisttriggerfifo ON invhist;
 
 
 CREATE OR REPLACE FUNCTION invhisttriggerfifo() RETURNS trigger 
