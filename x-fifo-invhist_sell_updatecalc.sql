@@ -59,20 +59,7 @@ BEGIN
     
     -- if not found inventory for sell
     if (NOT FOUND OR v_qty_avail < 0) THEN
-        -- check case when buy transaction exist 
-        -- but its quantity greater than sell quantity
-        -- i.e invbuy_qty > invsell_qty
-        SELECT invbuy_unitcost
-        FROM invbuy INTO v_calc_unitcost
-                WHERE
-                    invbuy_itemsite_id = v_itemsite_id
-                    AND
-                    invbuy_qtyafter > v_invsell_qtybefore + v_invsell_qty
-                
-                ORDER BY
-                    invbuy_qtyafter ASC
-                LIMIT 1;    
-        
+	
         -- if really not found any inventory for sell
         -- then use last unitcost for this itemsite
         IF (NOT FOUND) THEN

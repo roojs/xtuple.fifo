@@ -8,7 +8,7 @@ DECLARE
 BEGIN 
 
     -- if FIFO method not used 
-    IF ( v_itemsite_costmethod <> 'F' AND !fetchMetricBool('UseStandardAsFIFO') ) THEN
+    IF ( v_itemsite_costmethod <> 'F' AND NOT fetchMetricBool('UseStandardAsFIFO') ) THEN
         RETURN stdcost(i_itemsite_id);
     END IF;
     
