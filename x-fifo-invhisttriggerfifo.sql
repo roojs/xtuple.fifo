@@ -133,7 +133,7 @@ BEGIN
                 WHERE
                         invdepend_parent_id = v_first_invhist_id
                     AND
-                        invdepend_invhist_id = NEW.invhist_id
+                        invdepend_invhist_id = NEW.invhist_id;
                  
 
             IF NOT FOUND THEN
@@ -249,13 +249,13 @@ BEGIN
                     invsell_itemsite_id = v_itemsite_id;
             
             SELECT max(invbuy_qtyafter)    
-            INTO max_invbuy_qtyafter
-            FROM invbuy;
+                INTO v_max_invbuy_qtyafter
+                FROM invbuy;
             
             -- update estimated
             UPDATE invsell SET
                     invsell_is_estimate = true
-                WHERE invsell_qtybefore + invsell_qty > max_invbuy_qtyafter;
+                WHERE invsell_qtybefore + invsell_qty > v_max_invbuy_qtyafter;
 
             UPDATE invsell SET
                     invsell_totalcostbefore = b_invsell_summtotalcost
@@ -356,7 +356,7 @@ BEGIN
                 WHERE
                         invdepend_parent_id = v_first_invhist_id
                     AND
-                        invdepend_invhist_id = NEW.invhist_id
+                        invdepend_invhist_id = NEW.invhist_id;
                  
 
             IF NOT FOUND THEN
@@ -454,13 +454,13 @@ BEGIN
                     invsell_itemsite_id = v_itemsite_id;
             
             SELECT max(invbuy_qtyafter)    
-                 INTO max_invbuy_qtyafter
+                 INTO v_max_invbuy_qtyafter
                  FROM invbuy;
             
             -- update estimated
             UPDATE invsell SET
                     invsell_is_estimate = true
-                WHERE invsell_qtybefore + invsell_qty > max_invbuy_qtyafter;
+                WHERE invsell_qtybefore + invsell_qty > v_max_invbuy_qtyafter;
 
             UPDATE invsell SET
                     invsell_totalcostbefore = b_invsell_summtotalcost

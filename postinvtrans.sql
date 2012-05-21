@@ -70,7 +70,7 @@ BEGIN
 -- THIS NEEDS TO THROW AN ERROR IF the cost has not been found
 -- Just in case we missed something.
             
-            SELECT poitem_uniprice
+            SELECT poitem_unitprice
                 INTO _r.cost
                 FROM invhist ih, pohead ph, poitem pt 
                 WHERE 
