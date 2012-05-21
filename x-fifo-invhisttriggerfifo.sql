@@ -6,35 +6,35 @@ CREATE OR REPLACE FUNCTION invhisttriggerfifo() RETURNS trigger
 AS $BODY$
 DECLARE
     v_trans_qty             numeric(18, 6);
-    v_new_invhist_id         integer;
-    v_qtyafter                 numeric(18, 6);
-    v_qtyafter_old             numeric(18, 6);
+    v_new_invhist_id        integer;
+    v_qtyafter              numeric(18, 6);
+    v_qtyafter_old          numeric(18, 6);
     v_qtybefore             numeric(18, 6);
     v_qtybefore_old         numeric(18, 6);
-    v_qtydiff                 numeric(18, 6);
-    v_totalcostdiff            numeric(12, 2);
-    v_totalcostafter         numeric(12, 2);
+    v_qtydiff               numeric(18, 6);
+    v_totalcostdiff         numeric(12, 2);
+    v_totalcostafter        numeric(12, 2);
     v_totalcostafter_old    numeric(12, 2);
     
-    v_totalcostbefore_diff     numeric(18, 6);
+    v_totalcostbefore_diff  numeric(18, 6);
 
-    v_qty_before_min         numeric(18, 6);
+    v_qty_before_min        numeric(18, 6);
     
-    v_new_invbuy_data         record;
+    v_new_invbuy_data       record;
     
-    v_is_new                 boolean;
+    v_is_new                boolean;
     
-    v_first_transdate        timestamp with time zone;
-    v_first_invhist_id         integer;
-    v_new_totalcost            numeric(12, 2);
-    v_itemsite_id             integer;
+    v_first_transdate       timestamp with time zone;
+    v_first_invhist_id      integer;
+    v_new_totalcost         numeric(12, 2);
+    v_itemsite_id           integer;
     
-   
+    v_max_invbuy_qtyafter   numeric(12, 2);
         
        
-    new_inv_buy record;
+    new_inv_buy             record;
     
-    new_inv_sell record;
+    new_inv_sell            record;
     
 BEGIN
     
@@ -62,6 +62,14 @@ BEGIN
             RETURN NEW;
         END IF;
     END IF;
+
+    
+    -- invhist_transtype | RL << TRANSFER.. -- ignored..
+    -- invhist_transtype | RS (SELL)
+    -- invhist_transtype | AD (BUY OR SELL)
+    -- invhist_transtype | RP (BUY)
+    -- invhist_transtype | SH (SELL)
+            
     
     -- if BUY
     IF NEW.invhist_transtype = 'RP' 
@@ -105,7 +113,6 @@ BEGIN
         
          
             
--- WHAT happens when this query fails?   
             IF NOT FOUND THEN
                 v_is_new := true;
                 v_first_transdate := NEW.invhist_transdate;
@@ -120,8 +127,16 @@ BEGIN
                 v_new_totalcost := new_inv_buy.totalcost;
                 v_itemsite_id := new_inv_buy.itemsite_id;
             END IF;
-    
-            IF (TG_OP = 'INSERT') THEN
+
+ 
+            SELECT invdepend_parent_id FROM invdepend
+                WHERE
+                        invdepend_parent_id = v_first_invhist_id
+                    AND
+                        invdepend_invhist_id = NEW.invhist_id
+                 
+
+            IF NOT FOUND THEN
                 INSERT INTO invdepend 
                     (invdepend_parent_id, invdepend_invhist_id)
                 VALUES 
@@ -159,7 +174,8 @@ BEGIN
                         invbuy_qty, invbuy_totalcost, 
                         invbuy_unitcost, invbuy_transtype, 
                         
-                        invbuy_qtyafter, invbuy_totalcostafter
+                        invbuy_qtyafter, invbuy_totalcostafter,
+                        invbuy_is_estimate
                     ) VALUES (
                         NEW.invhist_id, NEW.invhist_transdate, 
                         NEW.invhist_ordnumber, NEW.invhist_itemsite_id, 
@@ -167,7 +183,8 @@ BEGIN
                         v_trans_qty, v_new_totalcost, 
                         NEW.invhist_unitcost, 'RP', 
                         
-                        v_qtyafter, v_totalcostafter
+                        v_qtyafter, v_totalcostafter,
+                        true
                     );
                     
                 v_qtydiff := new_inv_buy.qty;
@@ -223,14 +240,22 @@ BEGIN
             
             -- recalc FIFO values for all records after current
             UPDATE invsell SET
-                    invsell_calc_unitcost = invhist_sell_updatecalc(invsell_invhist_id),
+                    invsell_calc_unitcost = invhist_sell_unitcost_calc(invsell_invhist_id),
                     invsell_calc_totalcost = invsell_qty * invsell_calc_unitcost
                     
                 WHERE 
                     invsell_qtybefore >= v_qty_before_min 
                     AND 
                     invsell_itemsite_id = v_itemsite_id;
-
+            
+            SELECT max(invbuy_qtyafter)    
+            INTO max_invbuy_qtyafter
+            FROM invbuy;
+            
+            -- update estimated
+            UPDATE invsell SET
+                    invsell_is_estimate = true
+                WHERE invsell_qtybefore + invsell_qty > max_invbuy_qtyafter;
 
             UPDATE invsell SET
                     invsell_totalcostbefore = b_invsell_summtotalcost
@@ -284,8 +309,8 @@ BEGIN
                             invhist_ordnumber                               AS ordernumber,
                             invhist_itemsite_id                             AS itemsite_id,
                             min(invhist_id)                                 AS invhist_id,
-                            SUM(invhist_qoh_after - invhist_qoh_before)          AS qty,
-                            SUM(invhist_value_after - invhist_value_before)    AS current_totalcost,
+                            SUM(invhist_qoh_after - invhist_qoh_before)     AS qty,
+                            SUM(invhist_value_after - invhist_value_before) AS current_totalcost,
         
                             SUM(invhist_value_after - invhist_value_before)
                                     / SUM(invhist_qoh_after - invhist_qoh_before)
@@ -301,8 +326,10 @@ BEGIN
                             (invhist_transtype = 'SH' OR invhist_transtype = 'RS')
                             AND 
                             invhist_posted = true
-                        GROUP BY invhist_itemsite_id, invhist_ordnumber
-                        HAVING SUM(invhist_qoh_after - invhist_qoh_before) <> 0
+                        GROUP BY
+                            invhist_itemsite_id, invhist_ordnumber
+                        HAVING
+                            SUM(invhist_qoh_after - invhist_qoh_before) <> 0
                     ) AS a2,
                     invhist AS i
                 WHERE
@@ -313,41 +340,50 @@ BEGIN
 
             IF (NOT FOUND) THEN
                 v_is_new = true;
-                v_itemsite_id = NEW.invhist_itemsite_id;
-                v_first_transdate = NEW.invhist_transdate;
-                v_first_invhist_id = NEW.invhist_id;
+                v_itemsite_id       = NEW.invhist_itemsite_id;
+                v_first_transdate   = NEW.invhist_transdate;
+                v_first_invhist_id  = NEW.invhist_id;
             ELSE
                 v_is_new = false;
-                v_itemsite_id = new_inv_sell.itemsite_id;
-                v_first_transdate = new_inv_sell.transdate;
-                v_first_invhist_id = new_inv_sell.invhist_id;
+                v_itemsite_id       = new_inv_sell.itemsite_id;
+                v_first_transdate   = new_inv_sell.transdate;
+                v_first_invhist_id  = new_inv_sell.invhist_id;
             END IF;
             -- find the previous qty.. before this transaction..
             
-            IF (TG_OP = 'INSERT') THEN
+            
+            SELECT invdepend_parent_id FROM invdepend
+                WHERE
+                        invdepend_parent_id = v_first_invhist_id
+                    AND
+                        invdepend_invhist_id = NEW.invhist_id
+                 
+
+            IF NOT FOUND THEN
                 INSERT INTO invdepend 
                     (invdepend_parent_id, invdepend_invhist_id)
                 VALUES 
                     (v_first_invhist_id, NEW.invhist_id);
             END IF;
+          
             
             SELECT invsell_qtybefore 
-            INTO v_qtybefore
-            FROM invsell 
-                WHERE
-                    invsell_itemsite_id = v_itemsite_id
-                    AND   
-                    ( 
-                        invsell_transdate <  v_first_transdate 
-                        OR
-                        (
-                            invsell_transdate =  v_first_transdate 
-                            AND 
-                            invsell_invhist_id < v_first_invhist_id
+                INTO v_qtybefore
+                FROM invsell 
+                    WHERE
+                        invsell_itemsite_id = v_itemsite_id
+                        AND   
+                        ( 
+                            invsell_transdate <  v_first_transdate 
+                            OR
+                            (
+                                invsell_transdate =  v_first_transdate 
+                                AND 
+                                invsell_invhist_id < v_first_invhist_id
+                            )
                         )
-                    )
-            ORDER BY invsell_qtybefore DESC
-            LIMIT 1;
+                ORDER BY invsell_qtybefore DESC
+                LIMIT 1;
             
             v_qtybefore := COALESCE(v_qtybefore, 0);
             
@@ -369,9 +405,10 @@ BEGIN
                         v_trans_qty, NEW.invhist_value_after - NEW.invhist_value_before, 
                         NEW.invhist_unitcost, 'SH', 
                         
-                        v_qtybefore, false
+                        v_qtybefore, true
                     );
                 v_qtydiff := new_inv_sell.qty;
+                
             ELSE
                 -- get the existing qty recorded..
                 SELECT invsell_qtybefore 
@@ -380,11 +417,11 @@ BEGIN
                     WHERE invsell_invhist_id = new_inv_sell.invhist_id;
             
                 UPDATE invsell SET
-                    invsell_transdate = new_inv_sell.transdate,
-                    invsell_qty = new_inv_sell.qty,
+                    invsell_transdate   = new_inv_sell.transdate,
+                    invsell_qty         = new_inv_sell.qty,
                     invsell_current_totalcost = new_inv_sell.current_totalcost,
                     invsell_current_unitcost = new_inv_sell.current_unitcost,
-                    invsell_qtybefore = invsell_qtybefore + v_qtybefore
+                    invsell_qtybefore   = invsell_qtybefore + v_qtybefore
                 WHERE invsell_invhist_id = new_inv_sell.invhist_id;
                 
                 v_qtydiff := v_qtybefore - v_qtybefore_old;
@@ -408,7 +445,7 @@ BEGIN
             
             -- recalc FIFO values for all records after current
             UPDATE invsell SET
-                    invsell_calc_unitcost = invhist_sell_updatecalc(invsell_invhist_id),
+                    invsell_calc_unitcost = invhist_sell_unitcost_calc(invsell_invhist_id),
                     invsell_calc_totalcost = invsell_qty * invsell_calc_unitcost
                     
                 WHERE 
@@ -416,6 +453,15 @@ BEGIN
                     AND 
                     invsell_itemsite_id = v_itemsite_id;
             
+            SELECT max(invbuy_qtyafter)    
+                 INTO max_invbuy_qtyafter
+                 FROM invbuy;
+            
+            -- update estimated
+            UPDATE invsell SET
+                    invsell_is_estimate = true
+                WHERE invsell_qtybefore + invsell_qty > max_invbuy_qtyafter;
+
             UPDATE invsell SET
                     invsell_totalcostbefore = b_invsell_summtotalcost
                 FROM 
@@ -447,6 +493,6 @@ $BODY$
   LANGUAGE plpgsql VOLATILE
   COST 100;
   
-ALTER FUNCTION  invhist_sell_updatecalc(integer)
+ALTER FUNCTION  invhisttriggerfifo(integer)
   OWNER TO admin;
 

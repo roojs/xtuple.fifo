@@ -39,7 +39,8 @@ CREATE INDEX invbuy_transdate_indx
   ON invbuy
   USING btree
   (invbuy_transdate);    
-
+GRANT ALL ON TABLE invbuy TO admin;
+GRANT ALL ON TABLE invbuy TO xtrole;
 
 create table invsell (
     invsell_invhist_id integer NOT NULL UNIQUE,
@@ -86,6 +87,10 @@ CREATE INDEX invsell_transdate_indx
   USING btree
   (invsell_transdate);    
 
+GRANT ALL ON TABLE invsell TO admin;
+GRANT ALL ON TABLE invsell TO xtrole;
+
+
 CREATE TABLE invdepend (
     invdepend_parent_id integer NOT NULL,
     invdepend_invhist_id integer NOT NULL,
@@ -95,4 +100,6 @@ CREATE TABLE invdepend (
     CONSTRAINT invdepend_invhist_fk FOREIGN KEY (invdepend_invhist_id) REFERENCES invhist (invhist_id)
 );
 
+GRANT ALL ON TABLE invdepend TO admin;
+GRANT ALL ON TABLE invdepend TO xtrole;
 

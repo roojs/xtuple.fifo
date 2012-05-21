@@ -228,7 +228,7 @@
         
         Items with '*' may not be required as they can be obtained by JOIN
         
-    16.4 invdepend table
+    16.4 invdepend table [17 MAY 2012 NOTE IS THIS USED]
     
         New table to store dependancy information
             invdepend_invhist_id 
@@ -752,6 +752,10 @@
           
           This is UPDATED from before, where I previously thought it related to
             shiphead_number.
+    
+    26.2  - 16.4 invdepend table [17 MAY 2012 NOTE IS THIS USED]
+        Need to determine if this is used or needed.
+        
     
 27. Install Process [9MAY2012]
 
