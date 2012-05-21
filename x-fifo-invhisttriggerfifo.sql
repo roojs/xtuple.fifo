@@ -7,6 +7,7 @@ AS $BODY$
 DECLARE
     v_trans_qty             numeric(18, 6);
     v_new_invhist_id        integer;
+    v_tmp                   integer;
     v_qtyafter              numeric(18, 6);
     v_qtyafter_old          numeric(18, 6);
     v_qtybefore             numeric(18, 6);
@@ -129,7 +130,9 @@ BEGIN
             END IF;
 
  
-            SELECT invdepend_parent_id FROM invdepend
+            SELECT invdepend_parent_id
+                INTO v_tmp
+                FROM invdepend
                 WHERE
                         invdepend_parent_id = v_first_invhist_id
                     AND
@@ -352,7 +355,9 @@ BEGIN
             -- find the previous qty.. before this transaction..
             
             
-            SELECT invdepend_parent_id FROM invdepend
+            SELECT invdepend_parent_id
+                INTO v_tmp
+                FROM invdepend
                 WHERE
                         invdepend_parent_id = v_first_invhist_id
                     AND
