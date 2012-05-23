@@ -37,9 +37,9 @@ BEGIN
   SELECT CASE WHEN(itemsite_costmethod IN ('A','J')) THEN COALESCE(abs(pCostOvrld / pQty), avgcost(itemsite_id))
               ELSE stdCost(itemsite_item_id)
          END AS cost,
-         itemsite_costmethod,
-         itemsite_qtyonhand,
-     itemsite_warehous_id,
+            itemsite_costmethod,
+            itemsite_qtyonhand,
+            itemsite_warehous_id,
          ( (item_type = 'R') OR (itemsite_controlmethod = 'N') ) AS nocontrol,
          (itemsite_controlmethod IN ('L', 'S')) AS lotserial,
          (itemsite_loccntrl) AS loccntrl,
@@ -64,8 +64,22 @@ BEGIN
             -- Shipment or return shipment
             -- cost is based on fifo calculation?
             _r.cost = itemcost_dispense(pItemsiteid, pQty);
-        ELSE
-            -- recieving stock.
+            
+            
+        ELSIF (pTransType = 'AD' AND pQty > 0) THEN
+            -- increased stock..
+            IF _r.cost = 0.0 THEN
+                RAISE EXCEPTION 'Adjustment increase posted without value';
+            END IF;
+        
+        
+        
+        ELSIF (pTransType = 'AD' AND pQty < 0) THEN
+            RAISE NOTICE 'using itemcost_dispense';
+            _r.cost = itemcost_dispense(pItemsiteid, pQty);
+        
+        ELSE 
+             -- recieving stock.
             -- look up cost in purchase order
 -- THIS NEEDS TO THROW AN ERROR IF the cost has not been found
 -- Just in case we missed something.
@@ -99,20 +113,20 @@ BEGIN
     IF (pTransType = 'TS' OR pTransType = 'TR') THEN
       SELECT * INTO _t FROM tohead WHERE (tohead_number=pDocNumber);
       IF (pTransType = 'TS') THEN
-    _xferwhsid := CASE
-        WHEN (_t.tohead_src_warehous_id=_r.itemsite_warehous_id) THEN _t.tohead_trns_warehous_id
-        WHEN (_t.tohead_trns_warehous_id=_r.itemsite_warehous_id AND pComments ~* 'recall') THEN _t.tohead_src_warehous_id
-        WHEN (_t.tohead_trns_warehous_id=_r.itemsite_warehous_id) THEN _t.tohead_dest_warehous_id
-        WHEN (_t.tohead_dest_warehous_id=_r.itemsite_warehous_id) THEN _t.tohead_trns_warehous_id
-        ELSE NULL
+        _xferwhsid := CASE
+            WHEN (_t.tohead_src_warehous_id=_r.itemsite_warehous_id) THEN _t.tohead_trns_warehous_id
+            WHEN (_t.tohead_trns_warehous_id=_r.itemsite_warehous_id AND pComments ~* 'recall') THEN _t.tohead_src_warehous_id
+            WHEN (_t.tohead_trns_warehous_id=_r.itemsite_warehous_id) THEN _t.tohead_dest_warehous_id
+            WHEN (_t.tohead_dest_warehous_id=_r.itemsite_warehous_id) THEN _t.tohead_trns_warehous_id
+            ELSE NULL
         END;
       ELSIF (pTransType = 'TR') THEN
-    _xferwhsid := CASE
-        WHEN (_t.tohead_src_warehous_id=_r.itemsite_warehous_id) THEN _t.tohead_trns_warehous_id
-        WHEN (_t.tohead_trns_warehous_id=_r.itemsite_warehous_id AND pComments ~* 'recall') THEN _t.tohead_dest_warehous_id
-        WHEN (_t.tohead_trns_warehous_id=_r.itemsite_warehous_id) THEN _t.tohead_src_warehous_id
-        WHEN (_t.tohead_dest_warehous_id=_r.itemsite_warehous_id) THEN _t.tohead_trns_warehous_id
-        ELSE NULL
+        _xferwhsid := CASE
+            WHEN (_t.tohead_src_warehous_id=_r.itemsite_warehous_id) THEN _t.tohead_trns_warehous_id
+            WHEN (_t.tohead_trns_warehous_id=_r.itemsite_warehous_id AND pComments ~* 'recall') THEN _t.tohead_dest_warehous_id
+            WHEN (_t.tohead_trns_warehous_id=_r.itemsite_warehous_id) THEN _t.tohead_src_warehous_id
+            WHEN (_t.tohead_dest_warehous_id=_r.itemsite_warehous_id) THEN _t.tohead_trns_warehous_id
+            ELSE NULL
         END;
       END IF;
     END IF;
@@ -148,6 +162,12 @@ BEGIN
       RETURN -2;
     END IF;
 
+
+    --RAISE NOTICE 'itemsite_value=% ', (SELECT itemsite_value FROM itemsite where itemsite_id = pItemsiteid LIMIT 1);
+    --RAISE NOTICE '_r.cost=% ', _r.cost;
+    --RAISE NOTICE '_sense=% ', _sense;
+    --RAISE NOTICE 'pQty=% ', pQty;
+
     INSERT INTO invhist
     ( invhist_id, invhist_itemsite_id, invhist_transtype, invhist_transdate,
       invhist_invqty, invhist_qoh_before,
@@ -165,8 +185,8 @@ BEGIN
       uom_name, _r.cost, _xferwhsid, FALSE, pItemlocSeries
     FROM itemsite, item, uom
     WHERE ( (itemsite_item_id=item_id)
-     AND (item_inv_uom_id=uom_id)
-     AND (itemsite_id=pItemsiteid) );
+        AND (item_inv_uom_id=uom_id)
+        AND (itemsite_id=pItemsiteid) );
 
     IF (pCreditid IN (SELECT accnt_id FROM accnt)) THEN
       _creditid = pCreditid;

@@ -52,14 +52,15 @@ BEGIN
         IF (
             OLD.invhist_posted
             AND
-            v_trans_qty = OLD.invhist_qoh_after - OLD.invhist_qoh_before 
+                v_trans_qty = OLD.invhist_qoh_after - OLD.invhist_qoh_before 
             AND
-            NEW.invhist_value_after - NEW.invhist_value_before = 
-                OLD.invhist_value_after - OLD.invhist_value_before 
+                NEW.invhist_value_after - NEW.invhist_value_before = 
+                    OLD.invhist_value_after - OLD.invhist_value_before 
             AND
-            NEW.invhist_unitcost = OLD.invhist_unitcost
+                NEW.invhist_unitcost = OLD.invhist_unitcost
          )    
         THEN
+            RAISE NOTICE 'update made not change'; 
             RETURN NEW;
         END IF;
     END IF;
@@ -79,9 +80,15 @@ BEGIN
     
         
         
-            SELECT a2.ordernumber AS ordernumber, a2.itemsite_id AS itemsite_id, 
-                   a2.qty AS qty, a2.totalcost AS totalcost, a2.unitcost AS unitcost,
-                   i.invhist_id AS invhist_id, i.invhist_transdate AS transdate
+            SELECT
+                    a2.ordernumber AS ordernumber,
+                    a2.itemsite_id AS itemsite_id, 
+                    a2.qty AS qty,
+                    a2.totalcost AS totalcost,
+                    a2.unitcost AS unitcost,
+                    i.invhist_id AS invhist_id,
+                    i.invhist_transdate AS transdate
+                
                 INTO new_inv_buy
                 
                 FROM
@@ -113,6 +120,7 @@ BEGIN
                     1;
         
          
+            -- this logic is failing..
             
             IF NOT FOUND THEN
                 v_is_new := true;
@@ -121,15 +129,17 @@ BEGIN
                 new_inv_buy.qty := v_trans_qty;
                 v_new_totalcost := NEW.invhist_value_after - NEW.invhist_value_before;
                 v_itemsite_id := NEW.invhist_itemsite_id;
+                RAISE NOTICE 'set v_is_new = true'; 
             ELSE
                 v_is_new := false;
                 v_first_transdate := new_inv_buy.transdate;
                 v_first_invhist_id := new_inv_buy.invhist_id;
                 v_new_totalcost := new_inv_buy.totalcost;
                 v_itemsite_id := new_inv_buy.itemsite_id;
+                RAISE NOTICE 'set v_is_new = false'; 
             END IF;
 
- 
+            -- it get's this far and creates it..
             SELECT invdepend_parent_id
                 INTO v_tmp
                 FROM invdepend
@@ -147,27 +157,38 @@ BEGIN
             END IF;
             
             SELECT invbuy_qtyafter, invbuy_totalcostafter 
-            INTO v_qtyafter, v_totalcostafter 
-            FROM invbuy 
-                WHERE
-                    invbuy_itemsite_id = v_itemsite_id
-                    AND
-                    ( 
-                        invbuy_transdate <  v_first_transdate 
-                        OR
-                        (
-                            invbuy_transdate =  v_first_transdate 
-                            AND 
-                            invbuy_invhist_id < v_first_invhist_id
+                INTO v_qtyafter, v_totalcostafter 
+                FROM invbuy 
+                    WHERE
+                        invbuy_itemsite_id = v_itemsite_id
+                        AND
+                        ( 
+                            invbuy_transdate <  v_first_transdate 
+                            OR
+                            (
+                                invbuy_transdate =  v_first_transdate 
+                                AND 
+                                invbuy_invhist_id < v_first_invhist_id
+                            )
                         )
-                    )
-            ORDER BY invbuy_qtyafter DESC
-            LIMIT 1;
+                ORDER BY invbuy_qtyafter DESC
+                LIMIT 1;
             
             v_qtyafter := COALESCE(v_qtyafter, 0) + new_inv_buy.qty;
             v_totalcostafter := COALESCE(v_totalcostafter, 0) + v_new_totalcost;
   
-            IF v_is_new THEN
+  
+            SELECT
+                    invbuy_invhist_id INTO v_tmp
+                FROM
+                    invbuy
+                WHERE
+                    invbuy_invhist_id = v_first_invhist_id
+                LIMIT
+                    1;
+  
+  
+            IF NOT FOUND THEN
                 -- create a new record..
                 INSERT INTO invbuy 
                     (
@@ -177,8 +198,7 @@ BEGIN
                         invbuy_qty, invbuy_totalcost, 
                         invbuy_unitcost, invbuy_transtype, 
                         
-                        invbuy_qtyafter, invbuy_totalcostafter,
-                        invbuy_is_estimate
+                        invbuy_qtyafter, invbuy_totalcostafter
                     ) VALUES (
                         NEW.invhist_id, NEW.invhist_transdate, 
                         NEW.invhist_ordnumber, NEW.invhist_itemsite_id, 
@@ -186,8 +206,7 @@ BEGIN
                         v_trans_qty, v_new_totalcost, 
                         NEW.invhist_unitcost, 'RP', 
                         
-                        v_qtyafter, v_totalcostafter,
-                        true
+                        v_qtyafter, v_totalcostafter
                     );
                     
                 v_qtydiff := new_inv_buy.qty;
@@ -392,6 +411,8 @@ BEGIN
             
             v_qtybefore := COALESCE(v_qtybefore, 0);
             
+            
+            
             IF (v_is_new) THEN
                 -- create a new record..
                 INSERT INTO invsell 
@@ -498,6 +519,6 @@ $BODY$
   LANGUAGE plpgsql VOLATILE
   COST 100;
   
-ALTER FUNCTION  invhisttriggerfifo(integer)
+ALTER FUNCTION  invhisttriggerfifo()
   OWNER TO admin;
 

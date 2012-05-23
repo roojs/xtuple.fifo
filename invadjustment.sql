@@ -28,7 +28,7 @@ BEGIN
   END IF;
 
   IF ( pQty > 0) THEN
-    IF (pCostValue IS NULL) THEN
+    IF (pCostValue IS NULL OR pCostValue = 0) THEN
         RAISE EXCEPTION 'Cost value isn''t provided';
     END IF;
 	_CostValueOwn := pCostValue;

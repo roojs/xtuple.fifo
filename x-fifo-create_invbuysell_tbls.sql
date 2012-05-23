@@ -95,7 +95,7 @@ CREATE TABLE invdepend (
     invdepend_parent_id integer NOT NULL,
     invdepend_invhist_id integer NOT NULL,
     
-    CONSTRAINT invdepend_pkey PRIMARY KEY (invdepend_parent_id),
+    CONSTRAINT invdepend_pkey PRIMARY KEY (invdepend_invhist_id),
     CONSTRAINT invdepend_parent_fk FOREIGN KEY (invdepend_parent_id) REFERENCES invhist (invhist_id),
     CONSTRAINT invdepend_invhist_fk FOREIGN KEY (invdepend_invhist_id) REFERENCES invhist (invhist_id)
 );
