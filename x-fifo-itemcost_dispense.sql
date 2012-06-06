@@ -5,14 +5,19 @@ DECLARE
   i_itemsite_id         ALIAS FOR $1;
   i_invsell_qty         ALIAS FOR $2;
   v_invsell_qtybefore numeric(18, 6) DEFAULT 0;
-  v_invsell_totalcostbefore numeric(12, 2) DEFAULT 0;
-  v_invsell_calc_totalcost numeric(12, 2) DEFAULT 0;
+   v_invsell_calc_totalcost numeric(12, 2) DEFAULT 0;
   
   v_invsell_qty numeric(18, 6) DEFAULT 0;
   v_itemsite_costmethod character(1);
   
   v_totalcost_avail numeric(12, 2) DEFAULT 0;
+  v_qty_avail_before numeric(18, 6) DEFAULT 0;
   v_qty_avail numeric(18, 6) DEFAULT 0;
+  v_qty_sold numeric(18, 6) DEFAULT 0;
+  
+  v_invsell_totalcostbefore numeric(18, 6) DEFAULT 0;
+  v_invsell_totalcostafter numeric(18, 6) DEFAULT 0;
+  
 
   v_calc_unitcost numeric(16, 6) DEFAULT 0;
   
@@ -34,100 +39,61 @@ BEGIN
     END IF;
     
     
+    -- how many do we have.
+    SELECT
+            COALESCE(max(invbuy_qtyafter), 0)
+        INTO
+           v_qty_avail_before
+        FROM
+            invbuy
+        WHERE
+            invbuy_itemsite_id = i_itemsite_id;
+             
     
--- add our cost before value here..
--- what if not found..
-    SELECT 
-            invsell_qtybefore, invsell_totalcostbefore, 
-            invsell_qty, invsell_calc_totalcost
-            
-        FROM invsell 
-        INTO 
-                v_invsell_qtybefore, v_invsell_totalcostbefore, 
-                v_invsell_qty, v_invsell_calc_totalcost
-        WHERE 
-            invsell_itemsite_id = i_itemsite_id
-            AND
-            invsell_is_estimate = false
-        ORDER BY invsell_qtybefore DESC
-        LIMIT 1;
-
+    
+    -- how many have been sold, 
+    
+    SELECT
+            COALESCE(max(invsell_qtybefore + invsell_qty),0)
+        INTO
+            v_qty_sold
+        FROM
+            invsell
+        WHERE
+            invsell_itemsite_id = i_itemsite_id;
+             
+    v_qty_avail := v_qty_avail_before - v_qty_sold;
    
-    IF NOT FOUND THEN
-        v_invsell_qtybefore = 0;
-        v_invsell_totalcostbefore = 0;
+    -- not enough.. 
+    if (v_qty_avail < i_invsell_qty ) THEN
     
-    ELSE 
-    
-        v_invsell_qtybefore = v_invsell_qtybefore + v_invsell_qty;
-        v_invsell_totalcostbefore = v_invsell_totalcostbefore + v_invsell_calc_totalcost;
-    END IF;
-    
-    
-    RAISE NOTICE 'look up stock cost.';
-    
-    
-    SELECT 
-        -- we take all the stock
-        SUM(invbuy_totalcost)
-        
-        -- we take leftovers
-        - (v_invsell_totalcostbefore - min(invbuy_totalcostafter-invbuy_totalcost)) 
-
-        -- we take upto how many we need
-        - (max(invbuy_qtyafter)-v_invsell_qtybefore-i_invsell_qty)
-            *(max(invbuy_totalcostafter) - max(invbuy_totalcostafter-invbuy_totalcost))/(max(invbuy_qtyafter) - max(invbuy_qtyafter-invbuy_qty)) totalcost,
-
-        SUM(invbuy_qty)
-        
-        - (v_invsell_qtybefore - min(invbuy_qtyafter - invbuy_qty))
-        
-        - (max(invbuy_qtyafter)-v_invsell_qtybefore-i_invsell_qty) qty
-        
-        FROM invbuy 
-        INTO v_totalcost_avail, v_qty_avail
+        -- find the last unitcost..
+        SELECT
+                invbuy_unitcost
+            INTO
+                v_calc_unitcost
+            FROM
+                invbuy
             WHERE
-                invbuy_itemsite_id = i_itemsite_id
-                AND
-                invbuy_qtyafter > v_invsell_qtybefore
-                AND
-                invbuy_qtyafter - invbuy_qty < v_invsell_qtybefore + i_invsell_qty;
-
-    
-    
-    
-    -- if not found inventory for sell
-    if (v_qty_avail < 0 OR v_qty_avail IS NULL) THEN
-    
-    
+                invbuy_itemsite_id = i_itemsite_id    
+            ORDER BY
+                invbuy_qtyafter DESC
+            LIMIT
+                1;
+        
+        
         RAISE NOTICE 'QTY < 0 or not found..';
         RAISE NOTICE 'v_calc_unitcost=%', v_calc_unitcost;
         -- if really not found any inventory for sell
         
         -- then use last unitcost for this itemsite
-        IF (v_qty_avail < 0) THEN
-            RAISE NOTICE 'NOT FOUND.. trying to find last trax..';
         
-            SELECT 
-                (invhist_value_after - invhist_value_before)
-                    / (invhist_qoh_after - invhist_qoh_before) AS unitcost
-                FROM invhist INTO v_calc_unitcost
-                    WHERE 
-                        invhist_itemsite_id = i_itemsite_id
-                        AND
-                        invhist_qoh_after - invhist_qoh_before <> 0
-                ORDER BY invhist_transdate DESC, invhist_id DESC
-                LIMIT 1;
-             
-             
-            
-        END IF;
-        RAISE NOTICE 'v_calc_unitcost=%', v_calc_unitcost;
         -- if not found any inventory of this itemsite
         -- then use standard cost for this itemsite
         
-        IF (v_calc_unitcost IS NULL or v_calc_unitcost = 0.0) THEN
+        IF (NOT FOUND) THEN
             v_calc_unitcost = stdcost(i_itemsite_id);
+            -- what if that return nothing...
         END IF;
         
         RAISE NOTICE 'v_calc_unitcost=%', v_calc_unitcost;
@@ -135,11 +101,60 @@ BEGIN
         RETURN v_calc_unitcost;
 
     END IF;
-        
-    RAISE NOTICE 'v_totalcost_avail = %', v_totalcost_avail;
-    RAISE NOTICE 'v_qty_avail= %', v_qty_avail;
     
-    RETURN floor(( v_totalcost_avail/ v_qty_avail) * 1000) / 1000;
+    
+    -- FINALLY DO OUR PRICING...
+    -- same as calc code..
+    
+    SELECT
+        
+        invbuy_totalcostafter 
+            - ((invbuy_qtyafter - v_qty_sold) * invbuy_unitcost)
+        INTO
+            v_invsell_totalcostbefore
+        FROM
+            invbuy
+        WHERE
+            invbuy_qtyafter >= v_qty_sold
+            AND
+            invbuy_itemsite_id = i_itemsite_id
+        ORDER BY
+            invbuy_qtyafter ASC
+            
+        LIMIT 1;
+         
+    
+    RAISE NOTICE 'v_invsell_totalcostbefore=%', v_invsell_totalcostbefore;
+    
+    RAISE NOTICE 'v_qty_sold=%', v_qty_sold;
+    RAISE NOTICE 'i_invsell_qty=%', i_invsell_qty;
+    
+    -- NEXT JUST DO THE SAME AND find the quantity AFTER..
+    SELECT
+        invbuy_totalcostafter 
+             - ((invbuy_qtyafter - (v_qty_sold + i_invsell_qty)) * invbuy_unitcost)
+        INTO
+            v_invsell_totalcostafter
+        FROM
+            invbuy
+        WHERE
+            invbuy_qtyafter >= v_qty_sold + i_invsell_qty
+            AND
+            invbuy_itemsite_id = i_itemsite_id
+        ORDER BY
+            invbuy_qtyafter ASC
+        LIMIT 1;
+         
+    
+    RAISE NOTICE 'v_invsell_totalcostafter=%', v_invsell_totalcostafter;
+    
+    
+    
+    v_totalcost_avail := COALESCE(v_invsell_totalcostafter- v_invsell_totalcostbefore,0);
+    
+     
+    RETURN ABS(floor(( v_totalcost_avail/ i_invsell_qty) * 1000) / 1000);
+    
     
 END
 $BODY$

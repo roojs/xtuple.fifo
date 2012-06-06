@@ -32,7 +32,7 @@ DECLARE
     
     v_max_invbuy_qtyafter   numeric(12, 2);
         
-       
+    v_ordernumber           text;
     new_inv_buy             record;
     
     new_inv_sell            record;
@@ -60,7 +60,7 @@ BEGIN
                 NEW.invhist_unitcost = OLD.invhist_unitcost
          )    
         THEN
-            RAISE NOTICE 'update made not change'; 
+            --RAISE NOTICE 'update made not change'; 
             RETURN NEW;
         END IF;
     END IF;
@@ -129,33 +129,40 @@ BEGIN
                 new_inv_buy.qty := v_trans_qty;
                 v_new_totalcost := NEW.invhist_value_after - NEW.invhist_value_before;
                 v_itemsite_id := NEW.invhist_itemsite_id;
-                RAISE NOTICE 'set v_is_new = true'; 
+                --RAISE NOTICE 'set v_is_new = true'; 
             ELSE
                 v_is_new := false;
                 v_first_transdate := new_inv_buy.transdate;
                 v_first_invhist_id := new_inv_buy.invhist_id;
                 v_new_totalcost := new_inv_buy.totalcost;
                 v_itemsite_id := new_inv_buy.itemsite_id;
-                RAISE NOTICE 'set v_is_new = false'; 
+                --RAISE NOTICE 'set v_is_new = false'; 
             END IF;
 
             -- it get's this far and creates it..
-            SELECT invdepend_parent_id
-                INTO v_tmp
-                FROM invdepend
+            SELECT invdepend_invhist_id
+                INTO
+                    v_tmp
+                FROM
+                    invdepend
                 WHERE
-                        invdepend_parent_id = v_first_invhist_id
-                    AND
-                        invdepend_invhist_id = NEW.invhist_id;
+                    invdepend_invhist_id = NEW.invhist_id;
                  
 
             IF NOT FOUND THEN
                 INSERT INTO invdepend 
-                    (invdepend_parent_id, invdepend_invhist_id)
+                   (invdepend_invhist_id , invdepend_parent_id)
                 VALUES 
-                    (v_first_invhist_id, NEW.invhist_id);
-            END IF;
+                   ( NEW.invhist_id , v_first_invhist_id );
+            ELSE
+                UPDATE invdepend
+                    SET
+                        invdepend_parent_id = v_first_invhist_id
+                    WHERE
+                        invdepend_invhist_id = NEW.invhist_id;
             
+            END IF;
+             
             SELECT invbuy_qtyafter, invbuy_totalcostafter 
                 INTO v_qtyafter, v_totalcostafter 
                 FROM invbuy 
@@ -249,8 +256,14 @@ BEGIN
                     )
                 );
             
+            
+            --RAISE NOTICE 'v_qtyafter=%', v_qtyafter;
+            --RAISE NOTICE 'v_itemsite_id=%',v_itemsite_id;
+            
+            
+            
             --find record in invsell, which uses it inventories
-            SELECT max(invsell_qtybefore) 
+            SELECT COALESCE(max(invsell_qtybefore), 0)
                 INTO 
                     v_qty_before_min
                 FROM 
@@ -260,24 +273,50 @@ BEGIN
                     AND 
                     invsell_itemsite_id = v_itemsite_id;
             
+            
+            --RAISE NOTICE 'v_qty_before_min=%', v_qty_before_min;
+            
+            
             -- recalc FIFO values for all records after current
-            UPDATE invsell SET
-                    invsell_calc_unitcost = invhist_sell_unitcost_calc(invsell_invhist_id),
-                    invsell_calc_totalcost = invsell_qty * invsell_calc_unitcost
-                    
-                WHERE 
+            
+                     
+            PERFORM
+                    invhist_sell_unitcost_update(invsell_invhist_id)
+                FROM
+                    invsell
+                WHERE
                     invsell_qtybefore >= v_qty_before_min 
                     AND 
-                    invsell_itemsite_id = v_itemsite_id;
-            
+                    invsell_itemsite_id = v_itemsite_id
+                ORDER BY
+                    invsell_qtybefore ASC;
+                    
+             
+            -- find our maximum stock..
             SELECT max(invbuy_qtyafter)    
-                INTO v_max_invbuy_qtyafter
-                FROM invbuy;
+                INTO
+                    v_max_invbuy_qtyafter
+                FROM
+                    invbuy
+                WHERE
+                    invbuy_itemsite_id = v_itemsite_id;
+             
+            --RAISE NOTICE 'v_max_invbuy_qtyafter=%',v_max_invbuy_qtyafter;
             
             -- update estimated
             UPDATE invsell SET
                     invsell_is_estimate = true
-                WHERE invsell_qtybefore + invsell_qty > v_max_invbuy_qtyafter;
+                WHERE
+                    invsell_qtybefore + invsell_qty > v_max_invbuy_qtyafter 
+                    AND 
+                    invsell_itemsite_id = v_itemsite_id;
+
+             UPDATE invsell SET
+                    invsell_is_estimate = false
+                WHERE
+                    invsell_qtybefore + invsell_qty < v_max_invbuy_qtyafter
+                    AND 
+                    invsell_itemsite_id = v_itemsite_id;
 
             UPDATE invsell SET
                     invsell_totalcostbefore = b_invsell_summtotalcost
@@ -314,12 +353,16 @@ BEGIN
         OR
         NEW.invhist_transtype = 'RS' THEN
         
-    
+            
+            -- there are problems with this I think around the fact that
+            -- qty is -ve for this transaxtion - and the code seems to think it's +ve.
+             
+            
             
             SELECT  a2.ordernumber AS ordernumber,
                     a2.itemsite_id AS itemsite_id, 
-                    a2.qty AS qty,
-                    a2.current_totalcost AS current_totalcost,
+                    ABS(a2.qty) AS qty,
+                    ABS(a2.current_totalcost) AS current_totalcost,
                     a2.current_unitcost AS current_unitcost,
                     i.invhist_id AS invhist_id,
                     i.invhist_transdate AS transdate
@@ -330,6 +373,8 @@ BEGIN
                         SELECT
                             invhist_ordnumber                               AS ordernumber,
                             invhist_itemsite_id                             AS itemsite_id,
+                            
+                            -- this is returning the wrong thing?
                             min(invhist_id)                                 AS invhist_id,
                             SUM(invhist_qoh_after - invhist_qoh_before)     AS qty,
                             SUM(invhist_value_after - invhist_value_before) AS current_totalcost,
@@ -345,9 +390,15 @@ BEGIN
                             AND
                             invhist_ordnumber = NEW.invhist_ordnumber
                             AND
-                            (invhist_transtype = 'SH' OR invhist_transtype = 'RS')
-                            AND 
-                            invhist_posted = true
+                            (
+                                invhist_transtype = 'SH'
+                                OR
+                                invhist_transtype = 'RS'
+                                OR
+                                invhist_transtype = 'AD'
+                            )
+                --            AND 
+                --            invhist_posted = true
                         GROUP BY
                             invhist_itemsite_id, invhist_ordnumber
                         HAVING
@@ -359,40 +410,93 @@ BEGIN
                 LIMIT
                     1;
          
-
+            --RAISE NOTICE 'new_inv_sell=%',new_inv_sell;
+            
             IF (NOT FOUND) THEN
-                v_is_new = true;
-                v_itemsite_id       = NEW.invhist_itemsite_id;
-                v_first_transdate   = NEW.invhist_transdate;
-                v_first_invhist_id  = NEW.invhist_id;
+                 
+                v_is_new := true;
+                v_itemsite_id       := NEW.invhist_itemsite_id;
+                v_first_transdate    := NEW.invhist_transdate;
+                v_first_invhist_id   := NEW.invhist_id;
+                v_ordernumber   := NEW.invhist_ordnumber;
+                
             ELSE
-                v_is_new = false;
-                v_itemsite_id       = new_inv_sell.itemsite_id;
-                v_first_transdate   = new_inv_sell.transdate;
-                v_first_invhist_id  = new_inv_sell.invhist_id;
+             
+                v_is_new := false;
+                v_itemsite_id       := new_inv_sell.itemsite_id;
+                v_first_transdate  := new_inv_sell.transdate;
+                v_first_invhist_id  := new_inv_sell.invhist_id;
+                v_ordernumber := new_inv_sell.ordernumber;
             END IF;
+            
+            
+            -- do a sanity check...
+            
+            SELECT invsell_invhist_id
+                INTO
+                    v_tmp
+                FROM
+                    invsell
+                WHERE
+                   invsell_itemsite_id = v_itemsite_id
+                   AND
+                   invsell_ordnumber = v_ordernumber;
+            
+            IF (FOUND ) THEN
+                v_is_new := false;
+                IF ( v_tmp != v_first_invhist_id ) THEN
+                    -- the first invhist has changed, should not normmaly happens
+                    -- but occurs when we are bulk trashing invsell/buy..
+                    UPDATE invsell SET
+                            invsell_invhist_id = v_first_invhist_id
+                        WHERE
+                            invsell_invhist_id  = v_tmp;
+                END IF;
+            ELSE
+                v_is_new := true;
+                
+            END IF;
+                
+            
+            
+            
+            
+            
+            
+            
             -- find the previous qty.. before this transaction..
             
             
-            SELECT invdepend_parent_id
+            
+            
+            
+            
+            SELECT
+                invdepend_invhist_id
                 INTO v_tmp
                 FROM invdepend
                 WHERE
-                        invdepend_parent_id = v_first_invhist_id
-                    AND
-                        invdepend_invhist_id = NEW.invhist_id;
+                      invdepend_invhist_id = NEW.invhist_id;
                  
 
             IF NOT FOUND THEN
                 INSERT INTO invdepend 
-                    (invdepend_parent_id, invdepend_invhist_id)
+                   (invdepend_invhist_id,  invdepend_parent_id )
                 VALUES 
-                    (v_first_invhist_id, NEW.invhist_id);
+                    (NEW.invhist_id, v_first_invhist_id);
+            ELSE
+                UPDATE invdepend
+                    SET
+                        invdepend_parent_id = v_first_invhist_id
+                    WHERE
+                        invdepend_invhist_id = NEW.invhist_id;
+            
             END IF;
           
             
             SELECT invsell_qtybefore 
-                INTO v_qtybefore
+                INTO
+                    v_qtybefore
                 FROM invsell 
                     WHERE
                         invsell_itemsite_id = v_itemsite_id
@@ -412,6 +516,40 @@ BEGIN
             v_qtybefore := COALESCE(v_qtybefore, 0);
             
             
+            -- if qtybefore old is ZERO.. then the qty's need updating..
+            IF ((v_qtybefore <= 0.0) OR v_is_new) THEN
+                --RAISE NOTICE 'using sum to find qtybefore';
+                
+                --RAISE NOTICE 'v_first_transdate=%',v_first_transdate;
+                --RAISE NOTICE 'v_first_invhist_id=%',v_first_invhist_id;
+                
+                
+                -- it's probably broken..
+                -- the real qty before is the sum of all the preceding values..
+                SELECT
+                    SUM(invsell_qty)
+                INTO
+                    v_qtybefore
+                FROM invsell 
+                    WHERE
+                        invsell_itemsite_id = v_itemsite_id
+                        AND   
+                        ( 
+                            invsell_transdate <  v_first_transdate 
+                            OR
+                            (
+                                invsell_transdate =  v_first_transdate 
+                                AND 
+                                invsell_invhist_id < v_first_invhist_id
+                            )
+                        )
+                
+                LIMIT 1;
+                v_qtybefore := COALESCE(v_qtybefore, 0);
+
+                --RAISE NOTICE 'v_qtybefore=%s',v_qtybefore;
+            
+            END IF;
             
             IF (v_is_new) THEN
                 -- create a new record..
@@ -428,7 +566,7 @@ BEGIN
                         NEW.invhist_id, NEW.invhist_transdate, 
                         NEW.invhist_itemsite_id, NEW.invhist_ordnumber, 
                         
-                        v_trans_qty, NEW.invhist_value_after - NEW.invhist_value_before, 
+                        ABS(v_trans_qty), ABS(NEW.invhist_value_after - NEW.invhist_value_before), 
                         NEW.invhist_unitcost, 'SH', 
                         
                         v_qtybefore, true
@@ -437,25 +575,62 @@ BEGIN
                 
             ELSE
                 -- get the existing qty recorded..
-                SELECT invsell_qtybefore 
-                INTO v_qtybefore_old 
-                FROM invsell 
-                    WHERE invsell_invhist_id = new_inv_sell.invhist_id;
-            
-                UPDATE invsell SET
-                    invsell_transdate   = new_inv_sell.transdate,
-                    invsell_qty         = new_inv_sell.qty,
-                    invsell_current_totalcost = new_inv_sell.current_totalcost,
-                    invsell_current_unitcost = new_inv_sell.current_unitcost,
-                    invsell_qtybefore   = invsell_qtybefore + v_qtybefore
-                WHERE invsell_invhist_id = new_inv_sell.invhist_id;
+                --RAISE NOTICE 'updating';
+                SELECT
+                        COALESCE(invsell_qtybefore,0)
+                    INTO
+                        v_qtybefore_old 
+                    FROM
+                        invsell 
+                    WHERE
+                        invsell_invhist_id = new_inv_sell.invhist_id;
                 
+                v_qtybefore_old := COALESCE(v_qtybefore_old, 0);
+                   
+                     
+                
+                UPDATE invsell
+                    SET
+                        invsell_transdate   = new_inv_sell.transdate,
+                        invsell_qty         = new_inv_sell.qty,
+                        invsell_current_totalcost = new_inv_sell.current_totalcost,
+                        invsell_current_unitcost = new_inv_sell.current_unitcost,
+                        invsell_qtybefore   = COALESCE(invsell_qtybefore  + v_qtybefore, 0)
+                    WHERE
+                        invsell_invhist_id = new_inv_sell.invhist_id;
+                
+                --RAISE NOTICE 'v_qtybefore=%',v_qtybefore;
+                --RAISE NOTICE 'v_qtybefore_old=%',v_qtybefore_old;
                 v_qtydiff := v_qtybefore - v_qtybefore_old;
+                --RAISE NOTICE 'v_qtydiff=%',v_qtydiff;
+                
             END IF;
             
             -- update qty's after the record..
-            UPDATE invsell SET
-                    invsell_qtybefore = invsell_qtybefore + v_qtydiff
+            -- THIS IS more than a little borked..
+            UPDATE invsell as inv_cur
+                SET
+                    invsell_qtybefore =
+                        (
+                            SELECT
+                                    SUM(inv_prev.invsell_qty)
+                                FROM
+                                    invsell as inv_prev
+                                WHERE
+                                
+                                    inv_prev.invsell_itemsite_id = v_itemsite_id
+                                    AND
+                                    (
+                                        inv_prev.invsell_transdate < inv_cur.invsell_transdate 
+                                        OR 
+                                        (
+                                            inv_prev.invsell_transdate = inv_cur.invsell_transdate 
+                                            AND 
+                                            inv_prev.invsell_invhist_id < inv_cur.invsell_invhist_id
+                                        )
+                                    )
+                        )
+                         
                 WHERE 
                     invsell_itemsite_id = v_itemsite_id
                     AND
@@ -468,33 +643,53 @@ BEGIN
                             invsell_invhist_id > v_first_invhist_id
                         )
                     );
-            
-            -- recalc FIFO values for all records after current
-            UPDATE invsell SET
-                    invsell_calc_unitcost = invhist_sell_unitcost_calc(invsell_invhist_id),
-                    invsell_calc_totalcost = invsell_qty * invsell_calc_unitcost
                     
-                WHERE 
+            PERFORM
+                    invhist_sell_unitcost_update(invsell_invhist_id)
+                FROM
+                    invsell
+                WHERE
                     invsell_qtybefore >= v_qtybefore 
                     AND 
-                    invsell_itemsite_id = v_itemsite_id;
-            
+                    invsell_itemsite_id = v_itemsite_id
+                ORDER BY
+                    invsell_qtybefore ASC;
+                    
+            -- find our maximum stock..
             SELECT max(invbuy_qtyafter)    
-                 INTO v_max_invbuy_qtyafter
-                 FROM invbuy;
+                INTO
+                    v_max_invbuy_qtyafter
+                FROM
+                    invbuy
+                WHERE
+                    invbuy_itemsite_id = v_itemsite_id;
             
             -- update estimated
+            
             UPDATE invsell SET
                     invsell_is_estimate = true
-                WHERE invsell_qtybefore + invsell_qty > v_max_invbuy_qtyafter;
+                WHERE
+                    invsell_itemsite_id = v_itemsite_id
+                    AND 
+                    invsell_qtybefore + invsell_qty > v_max_invbuy_qtyafter;
 
             UPDATE invsell SET
-                    invsell_totalcostbefore = b_invsell_summtotalcost
+                    invsell_is_estimate = false
+                WHERE
+                    invsell_itemsite_id = v_itemsite_id
+                    AND
+                    invsell_qtybefore + invsell_qty < v_max_invbuy_qtyafter
+                    AND
+                    invsell_is_estimate = true;
+
+
+            UPDATE invsell SET
+                    invsell_totalcostbefore = COALESCE(b_invsell_summtotalcost, 0)
                 FROM 
                     (
                         SELECT 
                             a.invsell_invhist_id a_invsell_invhist_id,
-                            SUM(b.invsell_calc_totalcost) b_invsell_summtotalcost 
+                            SUM(COALESCE(b.invsell_calc_totalcost,0)) b_invsell_summtotalcost 
                             FROM invsell b, invsell a
                             WHERE
                                 b.invsell_qtybefore    < a.invsell_qtybefore

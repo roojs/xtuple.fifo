@@ -31,14 +31,18 @@ BEGIN
     
     
     v_totalcost_delta := invsell_rec.invsell_calc_totalcost - invsell_rec.invsell_current_totalcost;
-    
+     
     UPDATE invhist SET
         invhist_unitcost = invsell_rec.invsell_calc_unitcost,
-        invhist_value_after = invhist_value_before + invhist_qty * invhist_unitcost
+        invhist_value_after = invhist_value_before +
+                (invhist_qoh_after - invhist_qoh_before) * invsell_rec.invsell_calc_unitcost
     WHERE 
         invhist_id >= i_invhist_id
         AND
         invhist_itemsite_id = invsell_rec.invsell_itemsite_id;
+        
+        
+        
     
     SELECT cohead_cust_id
         INTO v_cohead_cust_id
@@ -54,12 +58,12 @@ BEGIN
         INTO v_costcat_asset_accnt_id, v_costcat_shipasset_accnt_id
         FROM costcat, itemsite
         WHERE 
-            costcat_id = itemsite_costcat 
+            costcat_id = itemsite_costcat_id
             AND 
             itemsite_id = invsell_rec.invsell_itemsite_id;
     
     UPDATE gltrans SET
-        gltrans_ammount = invsell_rec.invsell_calc_unitcost * invsell_rec.invsell_qty
+        gltrans_amount = invsell_rec.invsell_calc_unitcost * invsell_rec.invsell_qty
     WHERE 
         (
             (
@@ -80,7 +84,7 @@ BEGIN
         gltrans_accnt_id in (v_costcat_shipasset_accnt_id, v_cogs_accnt_id);
         
     UPDATE gltrans SET
-        gltrans_ammount = - invsell_rec.invsell_calc_unitcost * invsell_rec.invsell_qty
+        gltrans_amount = - invsell_rec.invsell_calc_unitcost * invsell_rec.invsell_qty
     WHERE 
         (
             (
